@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI贴纸制作工具</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+</head>
+<body>
+    <!-- 首页 -->
+    <div class="landing-page" id="landing-page">
+        <!-- 默认状态的人物图片 -->
+        <img src="images/dog_sticker.png" alt="小狗剪刀手" class="landing-dog-img" id="landing-dog-normal">
+        <!-- 制作中状态的人物图片 -->
+        <img src="images/sticker_making_character.png" alt="制作中人物" class="landing-dog-img processing-character" id="landing-dog-processing" style="display: none;">
+        
+        <div class="hero-section">
+            <button class="start-btn" onclick="showModal()">
+                <span class="material-icons">auto_fix_high</span>
+                开始制作贴纸
+            </button>
+        </div>
+        
+        <!-- 制作中状态 -->
+        <div class="processing-state" id="processing-state" style="display: none;">
+            <div class="processing-images">
+                <img src="images/processing1.png" alt="处理中" class="processing-img active">
+                <img src="images/processing2.png" alt="处理中" class="processing-img">
+            </div>
+            <button class="stop-btn" onclick="stopProcessing()">
+                <span class="material-icons">stop</span>
+                停止制作
+            </button>
+        </div>
+    </div>
+
+    <!-- 上传图片弹窗 -->
+    <div class="modal" id="upload-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>上传图片，AI自动去背景，生成精美贴纸</h2>
+                <button class="close-btn" onclick="hideModal()">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- 主要内容区域 -->
+                <div class="upload-main-area" id="upload-main-area">
+                    <!-- 上传状态 -->
+                    <div class="upload-state" id="upload-state">
+                        <label class="upload-zone" id="upload-zone" for="image-upload">
+                            <div class="upload-content">
+                                <div class="upload-icon">
+                                    <span class="material-icons">cloud_upload</span>
+                                </div>
+                                <div class="upload-text">
+                                    <h3>点击或拖拽图片到这里</h3>
+                                    <p>支持 JPG、PNG 格式，最大 10MB</p>
+                                </div>
+                            </div>
+                            <input type="file" id="image-upload" accept="image/*">
+                        </label>
+                    </div>
+                    
+                    <!-- 预览状态 -->
+                    <div class="preview-state" id="preview-state" style="display: none;">
+                        <div class="image-preview">
+                            <img id="preview-image" alt="预览图片">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 操作按钮 -->
+                <div class="modal-actions">
+                    <button class="primary-btn" id="process-btn" disabled onclick="startProcessing()">
+                        <span class="material-icons">auto_fix_high</span>
+                        <span>开始制作贴纸</span>
+                        <div class="button-loader" id="button-loader"></div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 预览贴纸弹窗 -->
+    <div class="preview-modal" id="preview-modal">
+        <!-- 礼花容器 -->
+        <canvas class="confetti-canvas" id="confetti-canvas"></canvas>
+        
+        <button class="close-btn" onclick="closePreview()">
+            <span class="material-icons">close</span>
+        </button>
+        
+        <!-- 标题 -->
+        <div class="preview-header">
+            <h2>制作成功！</h2>
+        </div>
+        
+        <div class="preview-area" id="sticker-preview-area"></div>
+        
+        <!-- 次要操作组 -->
+        <div class="preview-secondary-controls">
+            <!-- 描边开关 -->
+            <div class="toggle-switch-container">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="outline-toggle" checked onchange="toggleOutline()">
+                    <span class="slider"></span>
+                </label>
+                <span class="toggle-label">贴纸描边</span>
+            </div>
+        </div>
+        
+        <!-- 主操作 -->
+        <div class="preview-primary-controls">
+            <button class="primary-btn download-btn" id="download-btn" onclick="downloadSticker()">
+                <span class="material-icons">download</span>
+                <span>下载贴纸</span>
+            </button>
+            
+            <button class="reset-btn" onclick="resetAndRestart()">
+                <span class="material-icons">refresh</span>
+                <span>重新制作</span>
+            </button>
+        </div>
+        
+        <!-- 成功提示 -->
+        <div class="preview-tips" id="preview-tips">
+            <span class="material-icons">check_circle</span>
+            <p>你的贴纸已经制作完成</p>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
