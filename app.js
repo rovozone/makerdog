@@ -840,4 +840,4 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('页面隐藏，处理继续...');
         }
     });
-});
+});// Updated API path
