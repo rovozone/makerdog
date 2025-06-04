@@ -301,7 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const base64Data = await base64Promise;
             
-            const response = await fetch(`${API_BASE_URL}/api/process-image`, {
+            const response = await fetch(`${API_BASE_URL}/.netlify/functions/process-image`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
