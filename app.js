@@ -1,502 +1,868 @@
-// 纯前端AI贴纸制作器 - 使用MediaPipe和Canvas
-// 全局变量
-let selfieSegmentation;
-let currentImage = null;
-let processedImageData = null;
-let isModelLoaded = false;
+document.addEventListener('DOMContentLoaded', () => {
+    // 获取DOM元素
+    const uploadModal = document.getElementById('upload-modal');
+    const previewModal = document.getElementById('preview-modal');
+    const uploadInput = document.getElementById('image-upload');
+    const uploadZone = document.getElementById('upload-zone');
+    const uploadState = document.getElementById('upload-state'); // 上传状态容器
+    const previewState = document.getElementById('preview-state'); // 预览状态容器
+    const previewImage = document.getElementById('preview-image'); // 预览图片元素
+    const processBtn = document.getElementById('process-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const toggleOutlineBtn = document.getElementById('toggle-outline-btn');
+    const stickerPreviewArea = document.getElementById('sticker-preview-area'); // 贴纸预览区域
+    const processingState = document.getElementById('processing-state');
+    const buttonLoader = document.getElementById('button-loader');
+    const landingPage = document.getElementById('landing-page');
+    const landingDogImg = document.querySelector('.landing-dog-img');
+    const landingDogNormal = document.getElementById('landing-dog-normal'); // 普通状态人物图片
+    const landingDogProcessing = document.getElementById('landing-dog-processing'); // 制作中状态人物图片
+    const startBtn = document.querySelector('.start-btn');
 
-// 初始化MediaPipe
-async function initializeMediaPipe() {
-    try {
-        console.log('正在初始化MediaPipe...');
-        selfieSegmentation = new SelfieSegmentation({
-            locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+    // API服务器地址 - 自动检测环境
+    const API_BASE_URL = (() => {
+        // 如果是本地开发环境
+        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+            return 'http://localhost:5001';
+        }
+        
+        // 生产环境 - 使用当前域名（Netlify会自动路由到Functions）
+        return location.origin;
+    })();
+
+    // 状态变量
+    let originalImage = null;
+    let stickerWithOutline = null;
+    let stickerNoOutline = null;
+    let currentDisplayMode = 'with-outline';
+    let isProcessing = false;
+    let processingInterval = null;
+
+    // 3D交互相关变量
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let rotateX = 10;
+    let rotateY = 0;
+
+    // 礼花动画相关变量
+    let confettiCanvas = null;
+    let confettiCtx = null;
+    let confettiParticles = [];
+    let confettiAnimationId = null;
+
+    // 初始化礼花系统
+    function initConfetti() {
+        confettiCanvas = document.getElementById('confetti-canvas');
+        if (!confettiCanvas) return;
+        
+        confettiCtx = confettiCanvas.getContext('2d');
+        resizeConfettiCanvas();
+    }
+
+    // 调整礼花画布大小
+    function resizeConfettiCanvas() {
+        if (!confettiCanvas) return;
+        confettiCanvas.width = window.innerWidth;
+        confettiCanvas.height = window.innerHeight;
+    }
+
+    // 创建礼花粒子
+    function createConfettiParticle(x, y) {
+        const colors = ['#f9ba2a', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff'];
+        const shapes = ['square', 'circle'];
+        
+        return {
+            x: x || Math.random() * confettiCanvas.width,
+            y: y || -10,
+            velX: (Math.random() - 0.5) * 8,
+            velY: Math.random() * -8 - 5,
+            size: Math.random() * 8 + 4,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            shape: shapes[Math.floor(Math.random() * shapes.length)],
+            rotation: Math.random() * 360,
+            rotationSpeed: (Math.random() - 0.5) * 10,
+            gravity: 0.3,
+            life: 1,
+            decay: Math.random() * 0.02 + 0.01
+        };
+    }
+
+    // 启动礼花动画
+    function startConfetti() {
+        if (!confettiCanvas || !confettiCtx) return;
+        
+        // 清除现有动画
+        if (confettiAnimationId) {
+            cancelAnimationFrame(confettiAnimationId);
+        }
+        
+        // 创建初始礼花粒子 - 减少数量，更精致
+        const burstPoints = [
+            { x: confettiCanvas.width * 0.3, y: confettiCanvas.height * 0.2 },
+            { x: confettiCanvas.width * 0.7, y: confettiCanvas.height * 0.2 },
+            { x: confettiCanvas.width * 0.5, y: confettiCanvas.height * 0.25 }
+        ];
+        
+        burstPoints.forEach(point => {
+            for (let i = 0; i < 20; i++) { // 减少数量从30到20
+                confettiParticles.push(createConfettiParticle(point.x, point.y));
             }
         });
         
-        selfieSegmentation.setOptions({
-            modelSelection: 1, // 0 for general, 1 for landscape
-            selfieMode: false,
-        });
-        
-        selfieSegmentation.onResults(onSegmentationResults);
-        isModelLoaded = true;
-        console.log('MediaPipe初始化成功');
-        
-        // 更新UI状态
-        updateProcessButtonState();
-    } catch (error) {
-        console.error('MediaPipe初始化失败:', error);
-        // 如果MediaPipe失败，使用备用的简单背景移除算法
-        isModelLoaded = true;
-        console.log('使用备用抠图算法');
+        // 启动动画循环
+        animateConfetti();
     }
-}
 
-// MediaPipe分割结果处理
-function onSegmentationResults(results) {
-    if (!results.segmentationMask) return;
-    
-    const canvas = document.getElementById('processing-canvas');
-    const ctx = canvas.getContext('2d');
-    
-    // 设置canvas尺寸
-    canvas.width = results.image.width;
-    canvas.height = results.image.width;
-    
-    // 清除画布
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // 绘制原图
-    ctx.drawImage(results.image, 0, 0);
-    
-    // 获取图像数据
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    
-    // 应用分割蒙版
-    const mask = results.segmentationMask;
-    const maskCanvas = document.createElement('canvas');
-    const maskCtx = maskCanvas.getContext('2d');
-    maskCanvas.width = mask.width;
-    maskCanvas.height = mask.height;
-    maskCtx.drawImage(mask, 0, 0);
-    
-    const maskData = maskCtx.getImageData(0, 0, mask.width, mask.height).data;
-    
-    // 应用蒙版到原图
-    for (let i = 0; i < data.length; i += 4) {
-        const maskIndex = Math.floor(i / 4);
-        const maskValue = maskData[maskIndex * 4]; // R通道
+    // 礼花动画循环
+    function animateConfetti() {
+        confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
         
-        if (maskValue < 128) { // 背景像素
-            data[i + 3] = 0; // 设置为透明
+        for (let i = confettiParticles.length - 1; i >= 0; i--) {
+            const particle = confettiParticles[i];
+            
+            // 更新粒子位置
+            particle.velY += particle.gravity;
+            particle.x += particle.velX;
+            particle.y += particle.velY;
+            particle.rotation += particle.rotationSpeed;
+            particle.life -= particle.decay;
+            
+            // 绘制粒子
+            confettiCtx.save();
+            confettiCtx.translate(particle.x, particle.y);
+            confettiCtx.rotate((particle.rotation * Math.PI) / 180);
+            confettiCtx.globalAlpha = particle.life;
+            confettiCtx.fillStyle = particle.color;
+            
+            if (particle.shape === 'circle') {
+                confettiCtx.beginPath();
+                confettiCtx.arc(0, 0, particle.size / 2, 0, Math.PI * 2);
+                confettiCtx.fill();
+            } else {
+                confettiCtx.fillRect(-particle.size / 2, -particle.size / 2, particle.size, particle.size);
+            }
+            
+            confettiCtx.restore();
+            
+            // 移除过期或超出边界的粒子
+            if (particle.life <= 0 || particle.y > confettiCanvas.height + 100) {
+                confettiParticles.splice(i, 1);
+            }
+        }
+        
+        // 继续动画或停止
+        if (confettiParticles.length > 0) {
+            confettiAnimationId = requestAnimationFrame(animateConfetti);
+        }
+    }
+
+    // 停止礼花动画
+    function stopConfetti() {
+        if (confettiAnimationId) {
+            cancelAnimationFrame(confettiAnimationId);
+            confettiAnimationId = null;
+        }
+        confettiParticles = [];
+        if (confettiCtx) {
+            confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+        }
+    }
+
+    // 监听窗口大小变化
+    window.addEventListener('resize', resizeConfettiCanvas);
+
+    // 初始化礼花系统
+    document.addEventListener('DOMContentLoaded', initConfetti);
+
+    // 显示上传弹窗
+    window.showModal = () => {
+        if (isProcessing) {
+            // 如果正在处理中，则中断制作
+            stopProcessing();
+            return;
+        }
+        uploadModal.classList.add('active');
+        resetState();
+    };
+
+    // 隐藏上传弹窗
+    window.hideModal = () => {
+        uploadModal.classList.remove('active');
+        resetState();
+    };
+
+    // 重置状态
+    function resetState() {
+        uploadState.style.display = 'block';
+        previewState.style.display = 'none';
+        uploadZone.style.display = 'flex';
+        previewImage.src = '';
+        stickerPreviewArea.innerHTML = '';
+        processBtn.disabled = true;
+        originalImage = null;
+        stickerWithOutline = null;
+        stickerNoOutline = null;
+        currentDisplayMode = 'with-outline';
+        
+        // 重置文件输入
+        if (uploadInput) {
+            uploadInput.value = '';
+        }
+        
+        // 重置3D交互状态
+        isDragging = false;
+        rotateX = 10;
+        rotateY = 0;
+    }
+
+    // 设置处理状态
+    function setProcessingState(processing) {
+        isProcessing = processing;
+        
+        if (processing) {
+            // 开始处理状态
+            startBtn.innerHTML = '<span class="material-icons">stop</span> 停止制作';
+            startBtn.classList.add('processing');
+            
+            // 使用requestAnimationFrame确保动画同步
+            requestAnimationFrame(() => {
+                // 添加翻转动画，切换到制作中人物图片
+                landingDogNormal.classList.add('flip-to-processing');
+                
+                // 在翻转到90度时（动画中点）切换图片
+                setTimeout(() => {
+                    landingDogNormal.style.display = 'none';
+                    landingDogProcessing.style.display = 'block';
+                }, 300); // 0.6s动画的一半时间
+                
+                // 动画完成后移除翻转类，添加浮动动画
+                setTimeout(() => {
+                    landingDogNormal.classList.remove('flip-to-processing');
+                    landingDogProcessing.classList.add('processing-character');
+                    // 清除will-change以节省性能
+                    landingDogNormal.style.willChange = 'auto';
+                }, 600);
+            });
+            
+        } else {
+            // 结束处理状态
+            startBtn.innerHTML = '制作贴纸';
+            startBtn.classList.remove('processing');
+            
+            // 使用requestAnimationFrame确保动画同步
+            requestAnimationFrame(() => {
+                // 移除制作中的浮动动画，添加翻转动画
+                landingDogProcessing.classList.remove('processing-character');
+                landingDogProcessing.classList.add('flip-to-normal');
+                
+                // 在翻转到90度时（动画中点）切换图片
+                setTimeout(() => {
+                    landingDogProcessing.style.display = 'none';
+                    landingDogNormal.style.display = 'block';
+                }, 300);
+                
+                // 动画完成后移除翻转类，恢复正常浮动
+                setTimeout(() => {
+                    landingDogProcessing.classList.remove('flip-to-normal');
+                    // 清除will-change以节省性能
+                    landingDogProcessing.style.willChange = 'auto';
+                    // 普通状态的浮动动画由CSS自动处理
+                }, 600);
+            });
+        }
+    }
+
+    // 开始处理图片
+    window.startProcessing = async () => {
+        if (!originalImage) return;
+
+        // 保存文件引用，避免在隐藏弹窗时被清空
+        const file = uploadInput.files[0];
+        if (!file) {
+            alert('没有选择文件');
+            return;
+        }
+
+        // 隐藏上传弹窗，回到首页（不重置状态）
+        uploadModal.classList.remove('active');
+        
+        // 设置处理状态
+        setProcessingState(true);
+        
+        try {
+            // 将文件转换为base64
+            const reader = new FileReader();
+            const base64Promise = new Promise((resolve, reject) => {
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+            
+            const base64Data = await base64Promise;
+            
+            const response = await fetch(`${API_BASE_URL}/.netlify/functions/process-image`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    image: base64Data
+                })
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || '处理图片时出错');
+            }
+            
+            const data = await response.json();
+            
+            if (!data.success) {
+                throw new Error(data.error || '处理图片时出错');
+            }
+            
+            // 处理API返回的数据格式
+            // 如果返回的是字符串（base64），则转换为对象格式
+            let withOutlineData, noOutlineData;
+            
+            if (typeof data.imageWithOutline === 'string') {
+                // 当前API返回的是base64字符串格式
+                withOutlineData = {
+                    image: data.imageWithOutline,
+                    effects: {
+                        backgroundRemoval: true,
+                        outline: true,
+                        outlineColor: '#000000',
+                        outlineWidth: 3
+                    }
+                };
+                
+                noOutlineData = {
+                    image: data.imageNoOutline,
+                    effects: {
+                        backgroundRemoval: true,
+                        outline: false
+                    }
+                };
+            } else {
+                // 新格式已经是对象
+                withOutlineData = data.imageWithOutline;
+                noOutlineData = data.imageNoOutline;
+            }
+            
+            // 处理图片并应用效果
+            const processedImages = await processImagesWithEffects(
+                withOutlineData, 
+                noOutlineData
+            );
+            
+            // 创建两种图片对象
+            const imgWithOutline = document.createElement('img');
+            imgWithOutline.src = processedImages.withOutline;
+            imgWithOutline.dataset.type = 'with-outline';
+            
+            const imgNoOutline = document.createElement('img');
+            imgNoOutline.src = processedImages.noOutline;
+            imgNoOutline.dataset.type = 'no-outline';
+            
+            // 保存图片引用
+            stickerWithOutline = imgWithOutline;
+            stickerNoOutline = imgNoOutline;
+            
+            // 预加载图片
+            await preloadImages(processedImages.withOutline, processedImages.noOutline);
+            
+            // 同时触发人物翻转和成功页面显示，让过程更快更流畅
+            // 结束处理状态（人物开始翻转）
+            setProcessingState(false);
+            
+            // 立即显示成功页面，与人物翻转同时进行
+            showPreview();
+            
+        } catch (error) {
+            console.error('处理图片时出错:', error);
+            alert('处理图片时出错: ' + error.message);
+            stopProcessing();
+        }
+    };
+
+    // 停止处理
+    window.stopProcessing = () => {
+        setProcessingState(false);
+        resetState();
+    };
+
+    // 显示预览弹窗
+    function showPreview() {
+        // 隐藏处理中状态
+        processingState.style.display = 'none';
+        
+        // 清空预览区域
+        stickerPreviewArea.innerHTML = '';
+        
+        // 创建3D容器
+        const threeDContainer = document.createElement('div');
+        threeDContainer.className = 'three-d-container active';
+        stickerPreviewArea.appendChild(threeDContainer);
+        
+        // 创建CSS 3D贴纸
+        const css3dSticker = document.createElement('div');
+        css3dSticker.className = 'css-3d-sticker';
+        threeDContainer.appendChild(css3dSticker);
+        
+        // 创建图片元素
+        const img = document.createElement('img');
+        img.src = stickerWithOutline.src;
+        css3dSticker.appendChild(img);
+        
+        // 设置开关初始状态
+        const outlineToggle = document.getElementById('outline-toggle');
+        if (outlineToggle) {
+            outlineToggle.checked = true;
+        }
+        currentDisplayMode = 'with-outline';
+        
+        // 添加鼠标交互
+        css3dSticker.addEventListener('mousedown', handleMouseDown);
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        
+        // 添加触摸支持
+        css3dSticker.addEventListener('touchstart', handleTouchStart);
+        document.addEventListener('touchmove', handleTouchMove);
+        document.addEventListener('touchend', handleTouchUp);
+        
+        // 显示预览弹窗
+        previewModal.classList.add('active');
+        
+        // 在贴纸弹性动画达到最大时触发礼花
+        setTimeout(() => {
+            startConfetti();
+        }, 600); // 配合贴纸动画在0.4s时达到最大
+        
+        // 2秒后停止礼花，更快结束
+        setTimeout(() => {
+            stopConfetti();
+        }, 3000);
+    }
+
+    // 关闭预览弹窗
+    window.closePreview = () => {
+        previewModal.classList.remove('active');
+        stopConfetti();
+        
+        // 重置3D旋转
+        rotateX = 10;
+        rotateY = 0;
+        updateStickerRotation();
+        
+        // 清空预览区域
+        stickerPreviewArea.innerHTML = '';
+        
+        // 重置状态
+        currentDisplayMode = 'with-outline';
+        const outlineToggle = document.getElementById('outline-toggle');
+        if (outlineToggle) {
+            outlineToggle.checked = true;
+        }
+    };
+
+    // 切换描边显示
+    window.toggleOutline = () => {
+        const outlineToggle = document.getElementById('outline-toggle');
+        const isChecked = outlineToggle.checked;
+        
+        currentDisplayMode = isChecked ? 'with-outline' : 'no-outline';
+        
+        // 更新显示的图片
+        const css3dSticker = document.querySelector('.css-3d-sticker img');
+        if (css3dSticker) {
+            if (currentDisplayMode === 'with-outline' && stickerWithOutline) {
+                css3dSticker.src = stickerWithOutline.src;
+            } else if (currentDisplayMode === 'no-outline' && stickerNoOutline) {
+                css3dSticker.src = stickerNoOutline.src;
+            }
+        }
+    };
+
+    // 重新开始制作
+    window.resetAndRestart = () => {
+        // 关闭预览弹窗
+        closePreview();
+        
+        // 重置所有状态
+        resetState();
+        
+        // 显示上传弹窗
+        uploadModal.classList.add('active');
+        
+        // 清空文件输入
+        uploadInput.value = '';
+        
+        // 重置变量
+        originalImage = null;
+        stickerWithOutline = null;
+        stickerNoOutline = null;
+        currentDisplayMode = 'with-outline';
+        isProcessing = false;
+    };
+
+    // 复位贴纸角度
+    window.resetSticker = () => {
+        rotateX = 10;
+        rotateY = 0;
+        updateStickerRotation();
+        
+        const css3dSticker = document.querySelector('.css-3d-sticker');
+        if (css3dSticker) {
+            css3dSticker.style.animation = 'float 3s ease-in-out infinite';
+        }
+    };
+
+    // 下载贴纸
+    window.downloadSticker = async () => {
+        let targetImage = currentDisplayMode === 'with-outline' ? stickerWithOutline : stickerNoOutline;
+        let fileName = currentDisplayMode === 'with-outline' ? '带描边贴纸.png' : '无描边贴纸.png';
+        
+        if (!targetImage) return;
+        
+        try {
+            // 处理base64图片
+            const base64Data = targetImage.src;
+            
+            // 将base64转换为blob
+            const response = await fetch(base64Data);
+            const blob = await response.blob();
+            
+            const downloadLink = document.createElement('a');
+            downloadLink.href = URL.createObjectURL(blob);
+            downloadLink.download = fileName;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            
+            URL.revokeObjectURL(downloadLink.href);
+        } catch (error) {
+            console.error('下载图片时出错:', error);
+            alert('下载图片时出错，请重试');
+        }
+    };
+
+    // 监听图片上传
+    uploadInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('image/')) {
+            alert('请上传图片文件');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            // 切换到预览状态
+            uploadState.style.display = 'none';
+            previewState.style.display = 'flex';
+            
+            // 显示预览图片
+            previewImage.src = event.target.result;
+            originalImage = previewImage;
+
+            // 启用处理按钮
+            processBtn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+    });
+
+    // 允许拖放图片上传
+    uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.add('drag-over');
+    });
+    
+    uploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.remove('drag-over');
+    });
+    
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.remove('drag-over');
+        
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            if (!file.type.startsWith('image/')) {
+                alert('请上传图片文件');
+                return;
+            }
+            
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            uploadInput.files = dataTransfer.files;
+            
+            const changeEvent = new Event('change');
+            uploadInput.dispatchEvent(changeEvent);
+        }
+    });
+
+    // 鼠标交互处理
+    function handleMouseDown(e) {
+        e.preventDefault();
+        isDragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        
+        const css3dSticker = document.querySelector('.css-3d-sticker');
+        if (css3dSticker) {
+            css3dSticker.style.animation = 'none';
         }
     }
     
-    // 保存处理结果
-    ctx.putImageData(imageData, 0, 0);
-    processedImageData = canvas.toDataURL('image/png');
-    
-    // 显示结果
-    showProcessedResult();
-}
-
-// 简单的颜色阈值背景移除（备用算法）
-function simpleBackgroundRemoval(imageData) {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = function() {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
-            
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imgData.data;
-            
-            // 分析四个角落的颜色作为背景色
-            const corners = [
-                [0, 0], [canvas.width-1, 0], 
-                [0, canvas.height-1], [canvas.width-1, canvas.height-1]
-            ];
-            
-            let bgR = 0, bgG = 0, bgB = 0;
-            for (let corner of corners) {
-                const x = corner[0];
-                const y = corner[1];
-                const index = (y * canvas.width + x) * 4;
-                bgR += data[index];
-                bgG += data[index + 1];
-                bgB += data[index + 2];
-            }
-            bgR /= 4; bgG /= 4; bgB /= 4;
-            
-            // 移除相似颜色的背景
-            const threshold = 50;
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                
-                const distance = Math.sqrt(
-                    Math.pow(r - bgR, 2) + 
-                    Math.pow(g - bgG, 2) + 
-                    Math.pow(b - bgB, 2)
-                );
-                
-                if (distance < threshold) {
-                    data[i + 3] = 0; // 设置为透明
-                }
-            }
-            
-            ctx.putImageData(imgData, 0, 0);
-            processedImageData = canvas.toDataURL('image/png');
-            resolve();
-        };
-        img.src = imageData;
-    });
-}
-
-// 添加描边效果
-function addOutlineEffect(imageData, outlineWidth = 3, outlineColor = '#000000') {
-    return new Promise((resolve) => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
+    function handleMouseMove(e) {
+        if (!isDragging) return;
         
-        const img = new Image();
-        img.onload = function() {
-            canvas.width = img.width + outlineWidth * 2;
-            canvas.height = img.height + outlineWidth * 2;
-            
-            // 设置描边
-            ctx.strokeStyle = outlineColor;
-            ctx.lineWidth = outlineWidth;
-            
-            // 绘制多个偏移的图像创建描边效果
-            for (let x = -outlineWidth; x <= outlineWidth; x++) {
-                for (let y = -outlineWidth; y <= outlineWidth; y++) {
-                    if (x !== 0 || y !== 0) {
-                        ctx.globalCompositeOperation = 'destination-over';
-                        ctx.drawImage(img, outlineWidth + x, outlineWidth + y);
-                    }
-                }
-            }
-            
-            // 最后绘制原图
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.drawImage(img, outlineWidth, outlineWidth);
-            
-            resolve(canvas.toDataURL('image/png'));
-        };
-        img.src = imageData;
-    });
-}
-
-// 礼花动画
-function createConfetti() {
-    const canvas = document.getElementById('confetti-canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    
-    const confettiPieces = [];
-    const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3'];
-    
-    // 创建礼花片
-    for (let i = 0; i < 100; i++) {
-        confettiPieces.push({
-            x: Math.random() * canvas.width,
-            y: -10,
-            vx: Math.random() * 4 - 2,
-            vy: Math.random() * 3 + 2,
-            color: colors[Math.floor(Math.random() * colors.length)],
-            size: Math.random() * 5 + 2,
-            rotation: Math.random() * 360,
-            rotationSpeed: Math.random() * 10 - 5
-        });
+        const deltaX = e.clientX - lastX;
+        const deltaY = e.clientY - lastY;
+        
+        rotateY += deltaX * 0.5;
+        rotateX -= deltaY * 0.5;
+        
+        // 限制X轴旋转角度（上下移动）
+        rotateX = Math.max(-45, Math.min(45, rotateX));
+        // 限制Y轴旋转角度（左右移动）
+        rotateY = Math.max(-60, Math.min(60, rotateY));
+        
+        updateStickerRotation();
+        
+        lastX = e.clientX;
+        lastY = e.clientY;
     }
     
-    // 动画循环
-    function animate() {
+    function handleMouseUp() {
+        isDragging = false;
+    }
+    
+    function handleTouchStart(e) {
+        if (e.touches.length === 1) {
+            e.preventDefault();
+            isDragging = true;
+            lastX = e.touches[0].clientX;
+            lastY = e.touches[0].clientY;
+            
+            const css3dSticker = document.querySelector('.css-3d-sticker');
+            if (css3dSticker) {
+                css3dSticker.style.animation = 'none';
+            }
+        }
+    }
+    
+    function handleTouchMove(e) {
+        if (!isDragging || e.touches.length !== 1) return;
+        
+        const deltaX = e.touches[0].clientX - lastX;
+        const deltaY = e.touches[0].clientY - lastY;
+        
+        rotateY += deltaX * 0.5;
+        rotateX -= deltaY * 0.5;
+        
+        // 限制X轴旋转角度（上下移动）
+        rotateX = Math.max(-45, Math.min(45, rotateX));
+        // 限制Y轴旋转角度（左右移动）
+        rotateY = Math.max(-60, Math.min(60, rotateY));
+        
+        updateStickerRotation();
+        
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+    }
+    
+    function handleTouchUp() {
+        isDragging = false;
+    }
+    
+    function updateStickerRotation() {
+        const css3dSticker = document.querySelector('.css-3d-sticker');
+        if (css3dSticker) {
+            css3dSticker.style.transform = `translate(-50%, -50%) rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
+        }
+    }
+
+    // 预加载图片
+    function preloadImages(withOutlineUrl, noOutlineUrl) {
+        return new Promise((resolve, reject) => {
+            let loadedCount = 0;
+            
+            function checkAllLoaded() {
+                loadedCount++;
+                if (loadedCount === 2) {
+                    resolve();
+                }
+            }
+            
+            const img1 = new Image();
+            img1.onload = checkAllLoaded;
+            img1.onerror = reject;
+            img1.src = withOutlineUrl;
+            
+            const img2 = new Image();
+            img2.onload = checkAllLoaded;
+            img2.onerror = reject;
+            img2.src = noOutlineUrl;
+        });
+    }
+
+    // 客户端图像处理函数
+    async function processImagesWithEffects(withOutlineData, noOutlineData) {
+        return new Promise((resolve) => {
+            // 创建canvas进行图像处理
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // 创建临时图片元素
+            const img = new Image();
+            
+            img.onload = () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                
+                // 处理带描边版本
+                const withOutlineCanvas = processImageWithEffects(img, withOutlineData.effects, canvas, ctx);
+                
+                // 处理无描边版本  
+                const noOutlineCanvas = processImageWithEffects(img, noOutlineData.effects, canvas, ctx);
+                
+                resolve({
+                    withOutline: withOutlineCanvas.toDataURL('image/png'),
+                    noOutline: noOutlineCanvas.toDataURL('image/png')
+                });
+            };
+            
+            img.src = withOutlineData.image;
+        });
+    }
+
+    // 应用图像效果
+    function processImageWithEffects(img, effects, canvas, ctx) {
+        const resultCanvas = document.createElement('canvas');
+        const resultCtx = resultCanvas.getContext('2d');
+        
+        resultCanvas.width = canvas.width;
+        resultCanvas.height = canvas.height;
+        
+        // 绘制原图
+        resultCtx.drawImage(img, 0, 0);
+        
+        if (effects.backgroundRemoval) {
+            // 简单的背景去除效果
+            applyBackgroundRemoval(resultCtx, resultCanvas);
+        }
+        
+        if (effects.outline) {
+            // 添加描边效果
+            applyOutlineEffect(resultCtx, resultCanvas, effects.outlineColor, effects.outlineWidth);
+        }
+        
+        return resultCanvas;
+    }
+
+    // 背景去除效果（简化版）
+    function applyBackgroundRemoval(ctx, canvas) {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        
+        // 获取四个角落的颜色作为背景色参考
+        const corners = [
+            getPixelColor(data, 0, 0, canvas.width),
+            getPixelColor(data, canvas.width - 1, 0, canvas.width),
+            getPixelColor(data, 0, canvas.height - 1, canvas.width),
+            getPixelColor(data, canvas.width - 1, canvas.height - 1, canvas.width)
+        ];
+        
+        // 计算平均背景色
+        const avgBg = {
+            r: Math.round(corners.reduce((sum, c) => sum + c.r, 0) / corners.length),
+            g: Math.round(corners.reduce((sum, c) => sum + c.g, 0) / corners.length),
+            b: Math.round(corners.reduce((sum, c) => sum + c.b, 0) / corners.length)
+        };
+        
+        // 应用背景去除
+        const threshold = 40; // 阈值
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            
+            // 计算与背景色的距离
+            const distance = Math.sqrt(
+                Math.pow(r - avgBg.r, 2) + 
+                Math.pow(g - avgBg.g, 2) + 
+                Math.pow(b - avgBg.b, 2)
+            );
+            
+            // 如果颜色接近背景色，设为透明
+            if (distance < threshold) {
+                data[i + 3] = 0; // alpha = 0 (透明)
+            }
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    // 添加描边效果
+    function applyOutlineEffect(ctx, canvas, outlineColor = '#000000', outlineWidth = 3) {
+        // 获取当前图像数据
+        const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        
+        // 创建临时画布用于生成描边
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+        
+        // 清空主画布
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        for (let i = confettiPieces.length - 1; i >= 0; i--) {
-            const piece = confettiPieces[i];
-            
-            // 更新位置
-            piece.x += piece.vx;
-            piece.y += piece.vy;
-            piece.rotation += piece.rotationSpeed;
-            piece.vy += 0.1; // 重力
-            
-            // 绘制礼花片
-            ctx.save();
-            ctx.translate(piece.x, piece.y);
-            ctx.rotate(piece.rotation * Math.PI / 180);
-            ctx.fillStyle = piece.color;
-            ctx.fillRect(-piece.size/2, -piece.size/2, piece.size, piece.size);
-            ctx.restore();
-            
-            // 移除超出边界的礼花片
-            if (piece.y > canvas.height + 10) {
-                confettiPieces.splice(i, 1);
+        // 绘制多个偏移的图像来创建描边效果
+        ctx.fillStyle = outlineColor;
+        for (let dx = -outlineWidth; dx <= outlineWidth; dx++) {
+            for (let dy = -outlineWidth; dy <= outlineWidth; dy++) {
+                if (dx !== 0 || dy !== 0) {
+                    // 将原图像数据绘制到临时画布
+                    tempCtx.clearRect(0, 0, canvas.width, canvas.height);
+                    tempCtx.putImageData(originalImageData, 0, 0);
+                    
+                    // 将临时画布的内容绘制到主画布的偏移位置
+                    ctx.globalCompositeOperation = 'destination-over';
+                    ctx.drawImage(tempCanvas, dx, dy);
+                }
             }
         }
         
-        if (confettiPieces.length > 0) {
-            requestAnimationFrame(animate);
-        } else {
-            // 3秒后隐藏canvas
-            setTimeout(() => {
-                canvas.style.display = 'none';
-            }, 3000);
-        }
+        // 绘制原图像在最上层
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.putImageData(originalImageData, 0, 0);
     }
-    
-    canvas.style.display = 'block';
-    animate();
-}
 
-// UI交互函数
-function showModal() {
-    document.getElementById('upload-modal').style.display = 'flex';
-    
-    // 如果还没初始化MediaPipe，现在初始化
-    if (!isModelLoaded) {
-        initializeMediaPipe();
+    // 获取像素颜色
+    function getPixelColor(data, x, y, width) {
+        const index = (y * width + x) * 4;
+        return {
+            r: data[index],
+            g: data[index + 1],
+            b: data[index + 2],
+            a: data[index + 3]
+        };
     }
-}
 
-function hideModal() {
-    document.getElementById('upload-modal').style.display = 'none';
-    resetUploadState();
-}
-
-function closePreview() {
-    document.getElementById('preview-modal').style.display = 'none';
-    resetUploadState();
-}
-
-function resetUploadState() {
-    document.getElementById('upload-state').style.display = 'block';
-    document.getElementById('preview-state').style.display = 'none';
-    document.getElementById('preview-image').src = '';
-    document.getElementById('process-btn').disabled = true;
-    currentImage = null;
-    processedImageData = null;
-}
-
-function updateProcessButtonState() {
-    const processBtn = document.getElementById('process-btn');
-    if (currentImage && isModelLoaded) {
-        processBtn.disabled = false;
-        processBtn.innerHTML = '<span class="material-icons">auto_fix_high</span>开始制作';
-    } else if (currentImage) {
-        processBtn.innerHTML = '<span class="material-icons">hourglass_empty</span>AI模型加载中...';
-    }
-}
-
-// 图片上传处理
-function handleImageUpload(file) {
-    if (!file || !file.type.startsWith('image/')) {
-        alert('请选择有效的图片文件');
-        return;
-    }
-    
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        currentImage = e.target.result;
-        
-        // 显示预览
-        const previewImg = document.getElementById('preview-image');
-        previewImg.src = currentImage;
-        
-        // 切换状态
-        document.getElementById('upload-state').style.display = 'none';
-        document.getElementById('preview-state').style.display = 'block';
-        
-        // 更新按钮状态
-        updateProcessButtonState();
-    };
-    reader.readAsDataURL(file);
-}
-
-// 开始处理图片
-async function startProcessing() {
-    if (!currentImage) return;
-    
-    const processBtn = document.getElementById('process-btn');
-    processBtn.disabled = true;
-    processBtn.innerHTML = '<span class="material-icons">autorenew</span>处理中...';
-    
-    try {
-        // 如果MediaPipe可用，使用AI分割
-        if (window.SelfieSegmentation && selfieSegmentation) {
-            const img = new Image();
-            img.onload = function() {
-                selfieSegmentation.send({image: img});
-            };
-            img.src = currentImage;
-        } else {
-            // 使用简单背景移除
-            await simpleBackgroundRemoval(currentImage);
-            showProcessedResult();
-        }
-    } catch (error) {
-        console.error('处理失败:', error);
-        // 降级到简单算法
-        await simpleBackgroundRemoval(currentImage);
-        showProcessedResult();
-    }
-}
-
-// 显示处理结果
-async function showProcessedResult() {
-    if (!processedImageData) return;
-    
-    // 创建带描边和不带描边的版本
-    const withOutline = await addOutlineEffect(processedImageData, 3, '#000000');
-    const withoutOutline = processedImageData;
-    
-    // 创建预览区域
-    const previewArea = document.getElementById('sticker-preview-area');
-    previewArea.innerHTML = `
-        <div class="sticker-container" style="perspective: 1000px;">
-            <div class="sticker-display" style="transform-style: preserve-3d; transition: transform 0.3s;">
-                <img id="current-sticker" src="${withOutline}" alt="处理后的贴纸" 
-                     style="max-width: 300px; max-height: 300px; object-fit: contain; 
-                            filter: drop-shadow(0 10px 20px rgba(0,0,0,0.3));">
-            </div>
-        </div>
-        <div class="result-info">
-            <p>✨ 抠图完成！可以下载使用了</p>
-        </div>
-    `;
-    
-    // 保存两个版本到全局变量
-    window.stickerWithOutline = withOutline;
-    window.stickerWithoutOutline = withoutOutline;
-    
-    // 隐藏上传弹窗，显示预览弹窗
-    document.getElementById('upload-modal').style.display = 'none';
-    document.getElementById('preview-modal').style.display = 'flex';
-    
-    // 播放礼花动画
-    createConfetti();
-    
-    // 添加3D交互效果
-    addStickerInteraction();
-}
-
-// 添加贴纸3D交互效果
-function addStickerInteraction() {
-    const stickerDisplay = document.querySelector('.sticker-display');
-    const container = document.querySelector('.sticker-container');
-    
-    if (!container || !stickerDisplay) return;
-    
-    container.addEventListener('mousemove', (e) => {
-        const rect = container.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
-        
-        const rotateX = (y - centerY) / centerY * 10;
-        const rotateY = (centerX - x) / centerX * 10;
-        
-        stickerDisplay.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
-    });
-    
-    container.addEventListener('mouseleave', () => {
-        stickerDisplay.style.transform = 'rotateX(0deg) rotateY(0deg)';
-    });
-}
-
-// 切换描边效果
-function toggleOutline() {
-    const checkbox = document.getElementById('outline-toggle');
-    const stickerImg = document.getElementById('current-sticker');
-    
-    if (checkbox.checked) {
-        stickerImg.src = window.stickerWithOutline;
-    } else {
-        stickerImg.src = window.stickerWithoutOutline;
-    }
-}
-
-// 复位贴纸角度
-function resetSticker() {
-    const stickerDisplay = document.querySelector('.sticker-display');
-    if (stickerDisplay) {
-        stickerDisplay.style.transform = 'rotateX(0deg) rotateY(0deg)';
-    }
-}
-
-// 下载贴纸
-function downloadSticker() {
-    const checkbox = document.getElementById('outline-toggle');
-    const imageData = checkbox.checked ? window.stickerWithOutline : window.stickerWithoutOutline;
-    
-    const link = document.createElement('a');
-    link.download = `sticker_${Date.now()}.png`;
-    link.href = imageData;
-    link.click();
-}
-
-// 重新制作
-function resetAndRestart() {
-    closePreview();
-    showModal();
-}
-
-// 事件监听器设置
-document.addEventListener('DOMContentLoaded', function() {
-    // 文件选择
-    const fileInput = document.getElementById('image-upload');
-    fileInput.addEventListener('change', function(e) {
-        if (e.target.files.length > 0) {
-            handleImageUpload(e.target.files[0]);
+    // 添加页面可见性变化处理
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && isProcessing) {
+            // 页面隐藏时暂停处理指示
+            console.log('页面隐藏，处理继续...');
         }
     });
-    
-    // 拖拽上传
-    const uploadZone = document.getElementById('upload-zone');
-    
-    uploadZone.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        uploadZone.classList.add('dragover');
-    });
-    
-    uploadZone.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        uploadZone.classList.remove('dragover');
-    });
-    
-    uploadZone.addEventListener('drop', function(e) {
-        e.preventDefault();
-        uploadZone.classList.remove('dragover');
-        
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleImageUpload(files[0]);
-        }
-    });
-    
-    // 点击上传区域
-    uploadZone.addEventListener('click', function() {
-        fileInput.click();
-    });
-    
-    // 窗口大小变化时调整canvas
-    window.addEventListener('resize', function() {
-        const canvas = document.getElementById('confetti-canvas');
-        if (canvas) {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-    });
-    
-    // 初始化MediaPipe（延迟加载）
-    setTimeout(initializeMediaPipe, 1000);
 });
-
-// 页面加载完成后的初始化
-window.addEventListener('load', function() {
-    // 预加载一些资源
-    console.log('贴纸制作器已就绪');
-});
-
-// 导出函数供HTML调用
-window.showModal = showModal;
-window.hideModal = hideModal;
-window.closePreview = closePreview;
-window.startProcessing = startProcessing;
-window.toggleOutline = toggleOutline;
-window.resetSticker = resetSticker;
-window.downloadSticker = downloadSticker;
-window.resetAndRestart = resetAndRestart;
