@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const API_BASE_URL = (() => {
         // 如果是本地开发环境
         if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-            return 'http://localhost:5001';
+            return 'http://localhost:8000';
         }
         
         // 生产环境 - 使用当前域名（Netlify会自动路由到Functions）
