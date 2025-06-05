@@ -1,0 +1,9 @@
+{
+  "name": "makerdog-netlify",
+  "version": "1.0.0",
+  "description": "贴纸制作工具 - Netlify Functions",
+  "main": "index.js",
+  "dependencies": {
+    "canvas": "^2.11.2"
+  }
+} 
